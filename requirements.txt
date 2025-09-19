@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+torch
+transformers
+diffusers
+accelerate
+safetensors
+pillow
+rembg
+realesrgan
+gfpgan
+controlnet_aux
+python-dotenv
