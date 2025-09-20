@@ -18,9 +18,23 @@ MODEL_ID = os.getenv("HF_MODEL_ID", "stabilityai/stable-diffusion-3.5-medium")
 
 # Load pipelines
 device = "cuda" if torch.cuda.is_available() else "cpu"
-pipe_txt2img = StableDiffusionPipeline.from_pretrained(MODEL_ID, use_auth_token=HF_TOKEN, torch_dtype=torch.float16).to(device)
-pipe_inpaint = StableDiffusionInpaintPipeline.from_pretrained(MODEL_ID, use_auth_token=HF_TOKEN, torch_dtype=torch.float16).to(device)
-pipe_img2img = StableDiffusionImg2ImgPipeline.from_pretrained(MODEL_ID, use_auth_token=HF_TOKEN, torch_dtype=torch.float16).to(device)
+pipe_txt2img = StableDiffusionPipeline.from_pretrained(
+    MODEL_ID,
+    token=HF_TOKEN,
+    torch_dtype=torch.float16
+).to(device)
+
+pipe_inpaint = StableDiffusionInpaintPipeline.from_pretrained(
+    MODEL_ID,
+    token=HF_TOKEN,
+    torch_dtype=torch.float16
+).to(device)
+
+pipe_img2img = StableDiffusionImg2ImgPipeline.from_pretrained(
+    MODEL_ID,
+    token=HF_TOKEN,
+    torch_dtype=torch.float16
+).to(device)
 
 # FastAPI app
 app = FastAPI(title="Stable Diffusion 3.5 API", version="1.0")
