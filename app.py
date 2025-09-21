@@ -1,3 +1,4 @@
+```python
 import os
 from dotenv import load_dotenv
 from fastapi import FastAPI, UploadFile, File, Form
@@ -11,33 +12,30 @@ from PIL import Image
 import io
 import base64
 
-# Load environment variables
+# Load environment variables (optional, for model id)
 load_dotenv()
-HF_TOKEN = os.getenv("HF_TOKEN")
 MODEL_ID = os.getenv("HF_MODEL_ID", "stabilityai/stable-diffusion-3.5-medium")
 
-# Load pipelines
+# Load pipelines locally
 device = "cuda" if torch.cuda.is_available() else "cpu"
+
 pipe_txt2img = StableDiffusionPipeline.from_pretrained(
     MODEL_ID,
-    token=HF_TOKEN,
     torch_dtype=torch.float16
 ).to(device)
 
 pipe_inpaint = StableDiffusionInpaintPipeline.from_pretrained(
     MODEL_ID,
-    token=HF_TOKEN,
     torch_dtype=torch.float16
 ).to(device)
 
 pipe_img2img = StableDiffusionImg2ImgPipeline.from_pretrained(
     MODEL_ID,
-    token=HF_TOKEN,
     torch_dtype=torch.float16
 ).to(device)
 
 # FastAPI app
-app = FastAPI(title="Stable Diffusion 3.5 API", version="1.0")
+app = FastAPI(title="Stable Diffusion 3.5 API (Local)", version="1.0")
 
 # Background worker
 @app.on_event("startup")
@@ -109,3 +107,4 @@ async def restore(file: UploadFile = File(...)):
 @app.get("/task/{task_id}")
 async def get_task_status(task_id: str):
     return get_task(task_id)
+```
