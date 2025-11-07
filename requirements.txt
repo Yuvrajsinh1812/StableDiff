@@ -1,13 +1,25 @@
+# Core server
 fastapi
 uvicorn[standard]
+python-dotenv
+
+# PyTorch + Diffusers stack
 torch
 transformers
 diffusers
 accelerate
 safetensors
+xformers
+sentencepiece
+protobuf
+
+# Image processing
 pillow
 rembg
 realesrgan
 gfpgan
 controlnet_aux
-python-dotenv
+
+# Hugging Face & download helpers
+huggingface_hub
+hf_transfer
