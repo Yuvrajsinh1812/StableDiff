@@ -5,6 +5,7 @@ python-dotenv
 
 # PyTorch + Diffusers stack
 torch
+torchvision
 transformers
 diffusers
 accelerate
@@ -15,7 +16,9 @@ protobuf
 
 # Image processing
 pillow
+numpy
 rembg
+basicsr
 realesrgan
 gfpgan
 controlnet_aux
