@@ -1,91 +1,176 @@
 # utils/image_tools.py
+from rembg import remove as rembg_remove
 from PIL import Image
 import io
-import base64
-import logging
+import traceback
 
-log = logging.getLogger("pixfusion.image_tools")
+# Optional high-quality modules (we will use them if available; otherwise fallback)
+_REALSRGAN_AVAILABLE = False
+_GFPGAN_AVAILABLE = False
 
-# Try to import advanced libraries if available
+# Try to import Real-ESRGAN (may fail depending on environment)
 try:
-    from rembg import remove as rembg_remove
-    _has_rembg = True
+    # newer realesrgan wrapper names vary across versions; attempt import
+    from realesrgan import RealESRGANer  # v0.3-ish API
+    _REALSRGAN_AVAILABLE = True
 except Exception:
-    _has_rembg = False
-    log.info("rembg not installed; remove_background will use fallback (no-op)")
+    try:
+        # older package/class names
+        from realesrgan import RealESRGAN
+        _REALSRGAN_AVAILABLE = True
+    except Exception:
+        _REALSRGAN_AVAILABLE = False
 
+# Try to import GFPGAN face restorer
 try:
-    # Real-ESRGAN wrapper packages vary; try realesrgan
-    from realesrgan import RealESRGAN
-    _has_realesrgan = True
-except Exception:
-    _has_realesrgan = False
-    log.info("realesrgan not installed; upscale_image will use PIL resize")
-
-try:
-    # GFPGAN import
     from gfpgan import GFPGANer
-    _has_gfpgan = True
+    _GFPGAN_AVAILABLE = True
 except Exception:
-    _has_gfpgan = False
-    log.info("gfpgan not installed; restore_face will be a no-op")
+    _GFPGAN_AVAILABLE = False
+
+# Singletons for heavy models (created lazily)
+_upscaler = None
+_face_restorer = None
 
 
 def remove_background(image_bytes: bytes) -> bytes:
     """
-    Remove background using rembg if available; otherwise return original bytes.
-    Returns bytes of PNG.
+    Uses rembg to remove background. Input: bytes. Output: png bytes (RGBA).
     """
-    if _has_rembg:
-        try:
-            result = rembg_remove(image_bytes)
-            if isinstance(result, (bytes, bytearray)):
-                return bytes(result)
-            # sometimes returns PIL.Image
-            if hasattr(result, "save"):
-                buf = io.BytesIO()
-                result.save(buf, format="PNG")
-                return buf.getvalue()
-        except Exception as e:
-            log.exception("rembg failed: %s", e)
-    # fallback: just return original bytes
-    return image_bytes
+    try:
+        result = rembg_remove(image_bytes)
+        return result
+    except Exception as e:
+        # Return original bytes if rembg fails
+        print("rembg failed:", e)
+        return image_bytes
+
+
+def _pil_from_bytes(b: bytes) -> Image.Image:
+    return Image.open(io.BytesIO(b)).convert("RGB")
+
+
+def _pil_to_bytes(img: Image.Image, fmt="PNG") -> bytes:
+    buf = io.BytesIO()
+    img.save(buf, format=fmt)
+    return buf.getvalue()
+
+
+def upscale_image_from_bytes(image_bytes: bytes, scale: int = 2) -> bytes:
+    """
+    Upscale input bytes by scale factor (2 or 4). Prefer Real-ESRGAN if available,
+    otherwise fallback to Pillow LANCZOS resizing.
+    Returns PNG bytes.
+    """
+    try:
+        img = _pil_from_bytes(image_bytes)
+        out_img = upscale_image(img, scale=scale)
+        return _pil_to_bytes(out_img, fmt="PNG")
+    except Exception as e:
+        print("upscale_image_from_bytes failed:", e)
+        print(traceback.format_exc())
+        # fallback: return original
+        return image_bytes
 
 
 def upscale_image(img: Image.Image, scale: int = 2) -> Image.Image:
     """
-    Upscale using Real-ESRGAN if available, otherwise simple PIL resize with Lanczos
-    scale: 2, 4, etc.
+    Upscales a PIL image. If Real-ESRGAN is available we try to use it (lazy init),
+    otherwise fallback to Pillow resize.
+    scale: 2 or 4 recommended.
     """
-    if _has_realesrgan:
-        try:
-            # The RealESRGAN usage differs by package. This is a common pattern:
-            model = RealESRGAN(".", scale=scale)
-            model.load_weights("RealESRGAN_x2")  # ensure correct weights; may need adjustment
-            arr = model.predict(img)
-            return arr
-        except Exception as e:
-            log.exception("realesrgan upscale failed: %s", e)
+    global _upscaler
+    if scale not in (2, 4):
+        scale = int(scale)
 
-    # fallback: PIL resizing
-    new_w = int(img.width * scale)
-    new_h = int(img.height * scale)
-    return img.resize((new_w, new_h), resample=Image.LANCZOS)
+    if _REALSRGAN_AVAILABLE:
+        try:
+            if _upscaler is None:
+                # Attempt to create RealESRGANer with safe defaults.
+                # Different versions of 'realesrgan' expose different constructors;
+                # we'll try a couple of possibilities.
+                try:
+                    # Most modern wrappers want model_name or model_path; we try safe sensible defaults
+                    _upscaler = RealESRGANer(model_name="RealESRGAN_x4plus", scale=4)
+                except Exception:
+                    try:
+                        _upscaler = RealESRGANer("RealESRGAN_x4plus", 4)
+                    except Exception:
+                        # older RealESRGAN usage RealESRGAN(...)
+                        try:
+                            _upscaler = RealESRGAN()
+                        except Exception:
+                            _upscaler = None
+
+            if _upscaler is not None:
+                if scale == 4:
+                    if hasattr(_upscaler, "enhance"):
+                        # many Real-ESRGAN APIs provide enhance()
+                        out, _ = _upscaler.enhance(img, outscale=4)
+                        return out
+                    else:
+                        # try call in other common signature
+                        return _upscaler(img, scale=4)
+                elif scale == 2:
+                    # if only x4 model exists, downsample result or call with 2 if supported
+                    if hasattr(_upscaler, "enhance"):
+                        out, _ = _upscaler.enhance(img, outscale=2)
+                        return out
+                    else:
+                        out = _upscaler(img, scale=2)
+                        return out
+
+        except Exception as e:
+            print("RealESRGAN upscale failed, falling back to PIL resize:", e)
+            print(traceback.format_exc())
+
+    # Fallback: Pillow high-quality resize
+    w, h = img.size
+    new_size = (int(round(w * scale)), int(round(h * scale)))
+    return img.resize(new_size, Image.LANCZOS)
+
+
+def restore_face_from_bytes(image_bytes: bytes) -> bytes:
+    """
+    Restore face(s) using GFPGAN if available, else returns original bytes.
+    """
+    try:
+        img = _pil_from_bytes(image_bytes)
+        out_img = restore_face(img)
+        return _pil_to_bytes(out_img, fmt="PNG")
+    except Exception as e:
+        print("restore_face_from_bytes failed:", e)
+        print(traceback.format_exc())
+        return image_bytes
 
 
 def restore_face(img: Image.Image) -> Image.Image:
     """
-    Try to restore face using GFPGAN; fallback returns original image.
+    Use GFPGANer if available; otherwise return input.
     """
-    if _has_gfpgan:
+    global _face_restorer
+    if _GFPGAN_AVAILABLE:
         try:
-            # typical GFPGAN usage (may require different init args depending on package)
-            # weights & model params may need to be adapted
-            gfpganer = GFPGANer(model_path=None, upscale=1, arch="clean", channel_multiplier=2)
-            cropped_faces, restored_faces, restored_img = gfpganer.enhance(img, has_aligned=False, only_center_face=False, paste_back=True)
-            return restored_img
+            if _face_restorer is None:
+                # Default parameters frequently used in examples
+                _face_restorer = GFPGANer(model_path=None, upscale=1, arch="clean")
+            # gfpg an API often returns tuple (cropped_faces, restored_faces, restored_img)
+            try:
+                restored, _ = _face_restorer.enhance(img, has_aligned=False, only_center_face=False, paste_back=True)
+                # Some GFPGAN versions return different things; ensure PIL returned
+                if isinstance(restored, tuple):
+                    # restored image usually last element
+                    return restored[-1]
+                return restored
+            except Exception:
+                # alternative interface
+                res = _face_restorer.enhance(img)
+                if isinstance(res, tuple):
+                    return res[0]
+                return res
         except Exception as e:
-            log.exception("gfpgan failed: %s", e)
+            print("GFPGAN failed:", e)
+            print(traceback.format_exc())
 
-    # fallback
+    # fallback: return input
     return img
