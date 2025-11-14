@@ -1,53 +1,50 @@
 # utils/queue_manager.py
 import asyncio
 import uuid
-import time
-from typing import Any
+from typing import Callable, Any
+import traceback
 
-_tasks = {}
-_queue = asyncio.Queue()
-_worker_task = None
-_worker_lock = asyncio.Lock()
+tasks: dict = {}
+queue: asyncio.Queue = asyncio.Queue()
 
-async def add_task(func, *args, **kwargs) -> str:
+
+async def add_task(func: Callable, *args, **kwargs) -> str:
     """
-    Enqueue a callable (sync function). Returns a task_id.
-    The callable is executed in the event loop (synchronously). If your function blocks
-    for long (like model inference), it's still run in the same loop. This design is
-    simple; if you need heavy concurrency consider running in a ThreadPoolExecutor.
+    Add a blocking function (or coroutine) to the queue.
+    func should be a regular blocking function (not coroutine) OR an async function.
+    Return task_id immediately.
     """
     task_id = str(uuid.uuid4())
-    _tasks[task_id] = {"status": "queued", "created_at": time.time()}
-    await _queue.put((task_id, func, args, kwargs))
+    tasks[task_id] = {"status": "queued"}
+    await queue.put((task_id, func, args, kwargs))
     return task_id
 
+
 async def worker():
-    """
-    Consume queue forever, running work serially.
-    """
-    global _worker_task
-    log_prefix = "[queue_worker]"
+    """Continuously processes tasks from the queue. Uses asyncio.to_thread for blocking functions."""
     while True:
-        task_id, func, args, kwargs = await _queue.get()
+        task_id, func, args, kwargs = await queue.get()
         try:
-            _tasks[task_id]["status"] = "running"
-            # Run the function; if it raises, capture exception
-            result = func(*args, **kwargs)
-            _tasks[task_id] = {"status": "done", "result": result}
+            tasks[task_id]["status"] = "running"
+            # If func is coroutinefunction, await it; else run in thread
+            if asyncio.iscoroutinefunction(func):
+                result = await func(*args, **kwargs)
+            else:
+                # run blocking function in threadpool
+                result = await asyncio.to_thread(_call_safe, func, *args, **kwargs)
+
+            tasks[task_id] = {"status": "done", "result": result}
         except Exception as e:
-            _tasks[task_id] = {"status": "error", "error": str(e)}
+            tb = traceback.format_exc()
+            tasks[task_id] = {"status": "error", "error": str(e), "traceback": tb}
         finally:
-            _queue.task_done()
+            queue.task_done()
+
+
+def _call_safe(func, *args, **kwargs):
+    """Wrapper to call synchronous functions and catch exceptions to propagate out."""
+    return func(*args, **kwargs)
+
 
 def get_task(task_id: str) -> dict:
-    return _tasks.get(task_id, {"status": "not_found"})
-
-def start_worker_if_not_running(loop=None):
-    """
-    If worker isn't running, create an asyncio task for it.
-    Call this from app startup to ensure only one worker exists.
-    """
-    global _worker_task
-    if _worker_task is None or _worker_task.done():
-        loop = loop or asyncio.get_event_loop()
-        _worker_task = loop.create_task(worker())
+    return tasks.get(task_id, {"status": "not_found"})
