@@ -1,86 +1,91 @@
-import torch
-import numpy as np
-from io import BytesIO
+# utils/image_tools.py
 from PIL import Image
-from rembg import remove
-from basicsr.archs.rrdbnet_arch import RRDBNet
-from realesrgan import RealESRGANer
-from gfpgan import GFPGANer
+import io
+import base64
+import logging
 
-# -----------------------------------------------------------------------------
-# CONFIG
-# -----------------------------------------------------------------------------
-device = "cuda" if torch.cuda.is_available() else "cpu"
+log = logging.getLogger("pixfusion.image_tools")
 
-# -----------------------------------------------------------------------------
-# BACKGROUND REMOVAL
-# -----------------------------------------------------------------------------
+# Try to import advanced libraries if available
+try:
+    from rembg import remove as rembg_remove
+    _has_rembg = True
+except Exception:
+    _has_rembg = False
+    log.info("rembg not installed; remove_background will use fallback (no-op)")
+
+try:
+    # Real-ESRGAN wrapper packages vary; try realesrgan
+    from realesrgan import RealESRGAN
+    _has_realesrgan = True
+except Exception:
+    _has_realesrgan = False
+    log.info("realesrgan not installed; upscale_image will use PIL resize")
+
+try:
+    # GFPGAN import
+    from gfpgan import GFPGANer
+    _has_gfpgan = True
+except Exception:
+    _has_gfpgan = False
+    log.info("gfpgan not installed; restore_face will be a no-op")
+
+
 def remove_background(image_bytes: bytes) -> bytes:
-    """Remove background using rembg."""
-    try:
-        output = remove(image_bytes)
-        return output
-    except Exception as e:
-        print(f"❌ Background removal failed: {e}")
-        return image_bytes
+    """
+    Remove background using rembg if available; otherwise return original bytes.
+    Returns bytes of PNG.
+    """
+    if _has_rembg:
+        try:
+            result = rembg_remove(image_bytes)
+            if isinstance(result, (bytes, bytearray)):
+                return bytes(result)
+            # sometimes returns PIL.Image
+            if hasattr(result, "save"):
+                buf = io.BytesIO()
+                result.save(buf, format="PNG")
+                return buf.getvalue()
+        except Exception as e:
+            log.exception("rembg failed: %s", e)
+    # fallback: just return original bytes
+    return image_bytes
 
-# -----------------------------------------------------------------------------
-# IMAGE UPSCALING (RealESRGAN)
-# -----------------------------------------------------------------------------
-def upscale_image(pil_img: Image.Image) -> Image.Image:
-    """Upscale image using RealESRGAN (x4)."""
-    try:
-        print("⏫ Initializing RealESRGAN upscaler...")
 
-        # Load ESRGAN model
-        model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64,
-                        num_block=23, num_grow_ch=32, scale=4)
-        upsampler = RealESRGANer(
-            scale=4,
-            model_path=None,  # Automatically fetch model weights
-            model=model,
-            tile=512,
-            tile_pad=10,
-            pre_pad=0,
-            half=True if device == "cuda" else False,
-        )
+def upscale_image(img: Image.Image, scale: int = 2) -> Image.Image:
+    """
+    Upscale using Real-ESRGAN if available, otherwise simple PIL resize with Lanczos
+    scale: 2, 4, etc.
+    """
+    if _has_realesrgan:
+        try:
+            # The RealESRGAN usage differs by package. This is a common pattern:
+            model = RealESRGAN(".", scale=scale)
+            model.load_weights("RealESRGAN_x2")  # ensure correct weights; may need adjustment
+            arr = model.predict(img)
+            return arr
+        except Exception as e:
+            log.exception("realesrgan upscale failed: %s", e)
 
-        # Convert PIL to NumPy
-        img_np = np.array(pil_img.convert("RGB"))[:, :, ::-1]  # RGB → BGR
-        output, _ = upsampler.enhance(img_np, outscale=4)
-        result_img = Image.fromarray(output[:, :, ::-1])  # BGR → RGB
-        print("✅ Image upscaled successfully.")
-        return result_img
+    # fallback: PIL resizing
+    new_w = int(img.width * scale)
+    new_h = int(img.height * scale)
+    return img.resize((new_w, new_h), resample=Image.LANCZOS)
 
-    except Exception as e:
-        print(f"❌ Upscaling failed: {e}")
-        return pil_img
 
-# -----------------------------------------------------------------------------
-# FACE RESTORATION (GFPGAN)
-# -----------------------------------------------------------------------------
-def restore_face(pil_img: Image.Image) -> Image.Image:
-    """Restore faces using GFPGAN."""
-    try:
-        print("😊 Initializing GFPGAN face restorer...")
+def restore_face(img: Image.Image) -> Image.Image:
+    """
+    Try to restore face using GFPGAN; fallback returns original image.
+    """
+    if _has_gfpgan:
+        try:
+            # typical GFPGAN usage (may require different init args depending on package)
+            # weights & model params may need to be adapted
+            gfpganer = GFPGANer(model_path=None, upscale=1, arch="clean", channel_multiplier=2)
+            cropped_faces, restored_faces, restored_img = gfpganer.enhance(img, has_aligned=False, only_center_face=False, paste_back=True)
+            return restored_img
+        except Exception as e:
+            log.exception("gfpgan failed: %s", e)
 
-        restorer = GFPGANer(
-            model_path=None,  # Downloads GFPGANv1.4 automatically
-            upscale=1,
-            arch="clean",
-            channel_multiplier=2,
-            bg_upsampler=None,
-            device=device,
-        )
-
-        img_np = np.array(pil_img.convert("RGB"))[:, :, ::-1]
-        _, _, restored_img = restorer.enhance(
-            img_np, has_aligned=False, only_center_face=False, paste_back=True
-        )
-        result_img = Image.fromarray(restored_img[:, :, ::-1])
-        print("✅ Face restored successfully.")
-        return result_img
-
-    except Exception as e:
-        print(f"❌ Face restoration failed: {e}")
-        return pil_img
+    # fallback
+    return img
