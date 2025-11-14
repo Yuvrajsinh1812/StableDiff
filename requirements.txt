@@ -1,28 +1,24 @@
-# Core server
-fastapi
-uvicorn[standard]
-python-dotenv
+# core
+fastapi>=0.95.0
+uvicorn[standard]>=0.22.0
+python-dotenv>=1.0.0
+pillow>=10.0.0
 
-# PyTorch + Diffusers stack
-torch
-torchvision
-transformers
-diffusers
-accelerate
-safetensors
-xformers
-sentencepiece
-protobuf
+# Hugging Face + inference
+transformers==4.44.2
+diffusers==0.31.0
+accelerate>=0.24.0
+safetensors>=0.3.0
+huggingface_hub>=0.18.0
+hf_transfer>=0.1.9
+protobuf>=4.23.0
+sentencepiece>=0.1.99
 
-# Image processing
-pillow
-numpy
-rembg
-basicsr
-realesrgan
-gfpgan
-controlnet_aux
+# image extras (optional, heavy)
+rembg>=2.0.0
+realesrgan>=0.4.0
+gfpgan>=1.3.8
+controlnet_aux>=0.1.0
 
-# Hugging Face & download helpers
-huggingface_hub
-hf_transfer
+# optional performance
+xformers==0.0.22.post7+cu118
