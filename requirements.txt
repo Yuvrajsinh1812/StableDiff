@@ -1,10 +1,9 @@
-# server
 fastapi
 uvicorn[standard]
 python-dotenv
 loguru
 
-# diffusers / HF
+# HF + diffusers
 diffusers>=0.24.0
 transformers>=4.35.0
 accelerate>=0.22.0
@@ -16,11 +15,10 @@ hf_transfer
 pillow
 rembg
 
-# optional high-quality tools (these may be tricky to install on some systems)
-# If you want Real-ESRGAN/GFPGAN, install them when you have storage & matching wheels.
+# Optional quality enhancers (if available)
 realesrgan
 gfpgan
 
-# helpers
+# others
 protobuf
 tqdm
